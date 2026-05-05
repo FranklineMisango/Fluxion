@@ -43,8 +43,6 @@ These two together perfectly illustrate the hybrid HFT stack.
 
 Below is a GPU‑centric architecture diagram showing how market data flows into a CUDA analytics engine, processed through parallel kernels, and returned to the strategy layer.
 
-(Representative GPU analytics workflow)
-
 ![GPU Analytics Architecture](attachment:turn0image3)
 
 Fluxion implements this architecture using:
@@ -57,7 +55,7 @@ Fluxion implements this architecture using:
 
 A reference diagram of NVIDIA GPU architecture (SMs, warps, shared memory, global memory) relevant to Fluxion’s kernel design:
 
-![GPU Architecture](attachment:turn0image0)
+![GPU Architecture](gpu)
 
 Fluxion’s kernels are optimized around:
 - Warp‑synchronous programming  
