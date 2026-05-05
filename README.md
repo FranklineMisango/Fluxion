@@ -44,7 +44,6 @@ Fluxion’s kernels are optimized around:
 - Shared memory tiling  
 - Coalesced global memory access  
 - Register‑level reductions
-- 
 
 ## Analytics Pipeline
 
