@@ -65,8 +65,24 @@ Fluxion’s kernels are optimized around:
 - Coalesced global memory access  
 - Register‑level reductions
 - 
+```mermaid
+flowchart TB
+    subgraph GPU[GPU Architecture]
+        direction TB
+        SM1[Streaming Multiprocessor<br/>Warps, Registers, Shared Memory]
+        SM2[Streaming Multiprocessor]
+        SM3[Streaming Multiprocessor]
 
-## Pipeline
+        GM[Global Memory<br/>HBM / GDDR6]
+        L2[L2 Cache]
+
+        GM --> L2
+        L2 --> SM1
+        L2 --> SM2
+        L2 --> SM3
+    end
+```    
+## Analytics Pipeline
 
 
 ```mermaid
