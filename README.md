@@ -25,25 +25,7 @@ CUDA HFT fundamentals: open‑source implementations of order book matching engi
 NVIDIA STAC‑A3 benchmark: 1,000× speedup in backtesting simulations using GPU acceleration.
 
 
-Got you — you want **real architecture images** (not ASCII art) embedded directly into the README.  
-Below is a **clean, production‑ready README.md** that uses **relevant, accurate architecture diagrams** pulled from the search results.
-
-I selected **two images** that are directly relevant:
-
-1. **HFT system architecture** (RefId: turn0image5) — shows the FPGA/CPU low‑latency pipeline.  
-2. **GPU‑based HFT workflow** (RefId: turn0image3) — shows CPU→GPU data flow for analytics.
-
-These two together perfectly illustrate the hybrid HFT stack.
-
-
 ## Architecture
-
-
-### GPU‑Accelerated Analytics Pipeline
-
-Below is a GPU‑centric architecture diagram showing how market data flows into a CUDA analytics engine, processed through parallel kernels, and returned to the strategy layer.
-
-![GPU Analytics Architecture](attachment:turn0image3)
 
 Fluxion implements this architecture using:
 - CUDA kernels  
@@ -55,7 +37,7 @@ Fluxion implements this architecture using:
 
 A reference diagram of NVIDIA GPU architecture (SMs, warps, shared memory, global memory) relevant to Fluxion’s kernel design:
 
-![GPU Architecture](gpu)
+![GPU Architecture](images/gpu-cpu-system-diagram.png)
 
 Fluxion’s kernels are optimized around:
 - Warp‑synchronous programming  
@@ -63,25 +45,8 @@ Fluxion’s kernels are optimized around:
 - Coalesced global memory access  
 - Register‑level reductions
 - 
-```mermaid
-flowchart TB
-    subgraph GPU[GPU Architecture]
-        direction TB
-        SM1[Streaming Multiprocessor<br/>Warps, Registers, Shared Memory]
-        SM2[Streaming Multiprocessor]
-        SM3[Streaming Multiprocessor]
 
-        GM[Global Memory<br/>HBM / GDDR6]
-        L2[L2 Cache]
-
-        GM --> L2
-        L2 --> SM1
-        L2 --> SM2
-        L2 --> SM3
-    end
-```    
 ## Analytics Pipeline
-
 
 ```mermaid
 flowchart LR
