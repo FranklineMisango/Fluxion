@@ -66,6 +66,25 @@ Fluxion’s kernels are optimized around:
 - Register‑level reductions
 - 
 
+## Pipeline
+
+
+```mermaid
+flowchart LR
+    A[Market Data Feed] --> B[CPU Ingestion Layer]
+    B --> C[GPU Memory Transfer<br/>Pinned Memory + Streams]
+    C --> D[CUDA Kernel Engine]
+
+    D --> E[Order Book Analytics<br/>Reductions, VWAP, Depth]
+    D --> F[Risk Models<br/>Covariance, PCA, Monte Carlo]
+    D --> G[Cross-Venue Aggregation]
+
+    E --> H[Strategy Layer]
+    F --> H
+    G --> H
+
+```
+
 ## Technical References
 Fluxion’s design is informed by the following industry‑validated results:
 
