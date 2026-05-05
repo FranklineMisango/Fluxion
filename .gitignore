@@ -1,0 +1,29 @@
+# CMake build output
+build/
+CMakeCache.txt
+CMakeFiles/
+cmake-build-*/
+cmake_install.cmake
+Makefile
+*.dir/
+
+# Compiled objects and binaries
+*.o
+*.obj
+*.a
+*.so
+*.dll
+*.dylib
+*.exe
+*.out
+
+# CUDA/NVCC intermediates
+*.ptx
+*.cubin
+*.fatbin
+*.nvi
+*.nvcc.profile
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
