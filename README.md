@@ -1,140 +1,89 @@
-# Fluxion
+# Lync
+Lync is an open-source, FPGA-targeted trading engine designed for ultra-low latency execution. This project leverages Verilator for cycle-accurate C++ simulation and GTKWave for waveform analysis, providing a sandbox for developing hardware-accelerated trading strategies.
 
-Fluxion is a GPU‑accelerated framework for high‑frequency trading analytics, designed to demonstrate how modern NVIDIA architectures (Ampere, Hopper, Turing) can be applied to financial workloads that demand massive parallel math, high throughput, and near real‑time modeling. Fluxion targets the analytics layer of HFT — risk modeling, order book aggregation, and machine learning inference — where GPUs deliver orders‑of‑magnitude speedups.
+## Tech Stack
 
-## Core Components
-### Order Book Analytics  
-CUDA kernels for parallel reductions (best bid/ask, VWAP, liquidity depth).
-Optimized memory layouts (Structure of Arrays) for coalesced access.
+* HDL: SystemVerilog / Verilog
+* Simulation: Verilator (C++ Wrapper)
+* Visualization: GTKWave (VCD/FST)
+* Target Hardware: AMD/Xilinx UltraScale+ or Intel Stratix 10
 
-### Risk Calculations  
-Covariance matrices, PCA, regression, and Monte Carlo VaR simulations using cuBLAS and cuRAND.
-Benchmarks show GPU Monte Carlo can achieve millions of paths in milliseconds, validated by STAC‑A3 benchmarks (NVIDIA DGX‑2: 3.2M simulations in 60 minutes vs 3,200 on CPU).
-
-### Machine Learning Inference  
-LSTM and Transformer models for order flow prediction, accelerated with cuDNN and NVIDIA Triton Inference Server.
-Mixed‑precision Tensor Core acceleration reduces inference latency by up to 10× with minimal accuracy loss.
-
-### Cross‑Venue Aggregation  
-Multi‑order book kernels for simultaneous venue analysis.
-Profiling with Nsight Compute to optimize shared memory usage and warp occupancy.
-
-# Technical References
-cuBLAS GEMM optimization: achieving >90% of FP32 peak throughput on NVIDIA T4 GPUs, scaling to ~17 TFLOP/s with Tensor Cores.
-CUDA HFT fundamentals: open‑source implementations of order book matching engines and zero‑copy market data processing.
-NVIDIA STAC‑A3 benchmark: 1,000× speedup in backtesting simulations using GPU acceleration.
+## Key Features
 
 
-## Architecture
+### 1. Protocol parsers
 
-Fluxion implements this architecture using:
-- CUDA kernels  
-- cuBLAS for dense linear algebra  
-- cuRAND for Monte Carlo simulation  
-- Nsight Compute for profiling and optimization  
+**ITCH 5.0 — market data feed handler**
 
-### GPU Hardware Model
+Nasdaq TotalView-ITCH is a direct data feed product whose specification covers both software and hardware (FPGA) versions of the feed. At the hardware level, a parser for this protocol needs to handle a rich set of message types. The protocol uses a single byte character identifying the message type — for example `S` for System Event, `A` for Add Order — and a 64-bit timestamp representing the event in nanoseconds since midnight, reconstructed from a 6-byte raw timestamp.
 
-A reference diagram of NVIDIA GPU architecture (SMs, warps, shared memory, global memory) relevant to Fluxion’s kernel design:
+The full set of message types the ITCH FSM must decode includes Add Order (with and without MPID attribution), Order Executed, Order Executed with Price, Order Cancel, Order Delete, Order Replace, Trade (non-cross), Trade (cross), Broken Trade, Net Order Imbalance Indicator (NOII), Stock Directory, Stock Trading Action, and System Event messages. All integer fields are big-endian (network byte order) binary encoded numbers, and prices are in fixed-point format with an implied number of decimal places. Instruments are identified by a Stock Locate code — a low-lying integer employed as an array index for rapidly looking up instrument details, present at the same position in all messages to support efficient filtering.
 
-![GPU Architecture](images/gpu-cpu-system-diagram.png)
+On the transport side, ITCH protocols deliver messages using a higher-level protocol that handles sequencing, re-transmission, and delivery guarantees — either SoupBinTCP or MoldUDP64. In hardware, a state-of-the-art open-source FPGA ITCH parser achieves sub-25 nanosecond latency, processing multiple message types in parallel using speculative decoding.
 
-Fluxion’s kernels are optimized around:
-- Warp‑synchronous programming  
-- Shared memory tiling  
-- Coalesced global memory access  
-- Register‑level reductions
+**OUCH 5.0 — order entry protocol**
 
-## Analytics Pipeline
+OUCH is the low-level native protocol for connecting to Nasdaq, designed to offer maximum possible performance at the cost of flexibility. It allows participants to enter, replace, and cancel orders and receive executions. All numeric fields are binary formatted big-endian numbers: Longs (8 bytes), Integers (4 bytes), Shorts (2 bytes), and Bytes (1 byte).
 
-```mermaid
-flowchart LR
-    A[Market Data Feed] --> B[CPU Ingestion Layer]
-    B --> C[GPU Memory Transfer<br/>Pinned Memory + Streams]
-    C --> D[CUDA Kernel Engine]
+There are two kinds of messages: inbound (client to host, i.e. the trader sending to Nasdaq) and outbound (host to client). The key inbound messages are Enter Order, Replace Order, and Cancel Order. The key outbound messages are Order Accepted, Order Executed, and Order Cancelled. The `UserRefNum` field in the Enter Order message serves as a strictly-increasing transaction identifier — hardware must maintain and increment this counter per trading session. While ITCH runs over MoldUDP64, OUCH is generally built on top of SoupBinTCP as its sequencing protocol.
 
-    D --> E[Order Book Analytics<br/>Reductions, VWAP, Depth]
-    D --> F[Risk Models<br/>Covariance, PCA, Monte Carlo]
-    D --> G[Cross-Venue Aggregation]
 
-    E --> H[Strategy Layer]
-    F --> H
-    G --> H
 
-```
+### 2. L2 order book
 
-## Technical References
-Fluxion’s design is informed by the following industry‑validated results:
+The BRAM-based order book is the architectural centerpiece. It must maintain price-level bid and ask queues for all tracked instruments in real time. With a 1 GHz clock and four parallel decoder modules, parsing latency runs 20–25 ns per message, with order book updates taking 30–40 ns — a total pipeline latency of 100–150 ns processing 8.3M messages per second, utilizing ~35% LUTs and ~25% BRAMs on the target device.
 
-- **NVIDIA cuBLAS GEMM**  
-  Achieves >90% of FP32 peak throughput on Turing/Ampere GPUs, scaling to ~17 TFLOP/s with Tensor Cores.
+The design maps each instrument's order book into BRAM price-level arrays indexed by price tick. On receipt of an Add Order message, the engine inserts a new entry at the given price level. Order Cancel and Delete messages subtract shares from existing levels. Replace messages atomically remove and re-insert at the new price. Execution messages reduce share counts and remove depleted levels. The book also tracks Best Bid/Offer (BBO) — the top-of-book price and size — with a dedicated register updated on every state change, producing a sub-clock-cycle latency output for strategy logic downstream.
 
-- **STAC‑A3 Benchmark**  
-  Demonstrates GPU‑accelerated Monte Carlo backtesting achieving **1,000× speedups** over CPU implementations.
+Key design elements include BRAM-based order storage, price-level tables, FIFO buffering, and hardware BBO tracking. Clock domain crossing (CDC) is managed with gray code synchronization. Real-time order book update latency targets sub-microsecond performance.
 
-- **CUDA Finance Research**  
-  Includes GPU‑based order book simulators, Monte Carlo pricers, and zero‑copy market data pipelines.
 
-These references validate the feasibility of GPU‑accelerated HFT analytics at production scale.
+### 3. Pre-trade risk engine (SEC Rule 15c3-5)
 
-## Installation
+This is the compliance core of the engine. SEC Rule 15c3-5 requires broker-dealers with market access to establish, document, and maintain a system of risk management controls and supervisory procedures that are reasonably designed to systematically limit financial exposure arising from market access.
 
-### Requirements
-- CUDA Toolkit 12.x+
-- NVIDIA GPU (Ampere or newer recommended)
-- CMake (optional)
-- Nsight Compute (for profiling)
+Specifically, the rule mandates: (i) preventing entry of orders unless all regulatory requirements are satisfied on a pre-order entry basis; (ii) preventing entry of orders for securities a broker-dealer is restricted from trading; (iii) restricting market access technology to authorized persons; and (iv) assuring surveillance personnel receive immediate post-trade execution reports.
 
-### Build
-Simple build:
-```bash
-nvcc orderbook/cuda_orderbook.cu -o bin/orderbook
-nvcc risk_models/monte_carlo.cu -o bin/montecarlo
-```
+In hardware terms, this translates to three wire-speed checks that run in the pipeline before any OUCH Enter Order message is transmitted:
 
-CMake build:
-```bash
-mkdir build && cd build
-cmake ..
-make -j
-```
+- **Order size check**: compares the proposed quantity against a per-instrument or per-account maximum share threshold stored in BRAM or LUTRAM, rejecting in one clock cycle.
+- **Price collar check**: validates that the limit price falls within an acceptable deviation band from a reference price (typically derived from the live order book's BBO). This prevents erroneous orders from being sent at wildly off-market prices.
+- **Position limit check**: maintains a running net position per symbol using an accumulator register updated on every execution confirmation received over the OUCH inbound path. New orders are blocked if they would push net exposure beyond configured limits.
 
----
+The practice of "unfiltered" or "naked" sponsored access is effectively prohibited, since the rule requires that a broker-dealer apply these controls on a pre-trade basis, under the direct and exclusive control of the broker-dealer providing market access. Implementing these in FPGA fabric rather than software satisfies the "direct and exclusive control" requirement while achieving deterministic latency.
 
-## Usage
 
-### Order Book Analytics
-```bash
-./bin/orderbook sample_data/orderbook.csv
-```
 
-### Monte Carlo VaR
-```bash
-./bin/montecarlo
-```
+### 4. Verilator testbench
 
-### Covariance / PCA
-```bash
-./bin/covariance sample_data/returns.csv
-```
+Verilator compiles SystemVerilog RTL to a C++ class, enabling simulation at speeds orders of magnitude faster than event-driven simulators like ModelSim, while remaining cycle-accurate. In a Verilator testbench, C++ owns the simulation loop, clock generation, reset sequencing, and FST dumping, while SystemVerilog owns interface declarations, DUT instantiation, assertions, and test logic. Plusargs bridge the two layers at runtime without recompilation.
 
----
+The PCAP replay component reads captured network traffic files — real Nasdaq ITCH multicast packets — and injects them byte-by-byte into the DUT's AXI-Stream input port, with accurate inter-packet timing reconstructed from PCAP timestamps. This approach provides the advantage of using real-world captured traffic as input, giving the custom IP a confident data input that reflects actual market conditions.
 
-## Target Benchmarks
-(All measured on NVIDIA RTX)
+The testbench drives a complete stimulus-response loop: PCAP → ITCH parser → order book → risk engine → OUCH encoder, comparing outputs against a golden C++ reference model. Latency is measured by cycle-counting the delta between a stimulus input timestamp and the resulting OUCH output assertion on the AXI-Stream output bus.
 
-- Order book reduction: **10M levels < 5ms**  
-- Monte Carlo VaR: **1M paths ~20ms**  
-- Covariance matrix (4096×4096): **< 3ms** using cuBLAS  
-- Cross‑venue aggregation: **5 venues < 10ms**  
 
----
+### 5. AXI-Stream pipeline architecture
 
-## Notes
-- Fluxion is a **pure CUDA project** — no Python, no ML, no cuDNN.  
-- Designed for **analytics**, not sub‑microsecond execution.  
-- Complements FPGA/CPU execution stacks.
----
+All internal data movement between pipeline stages uses the AXI4-Stream protocol. Each stage (ITCH parser, order book, risk engine, OUCH encoder) has a `TVALID`/`TREADY` handshake, `TDATA`, `TKEEP`, and `TLAST` signals. Back-pressure propagates upstream so no data is lost under burst conditions. The pipeline runs at a single clock domain on the critical path (targeting 300–500 MHz on UltraScale+ fabric), with clock domain crossing handled explicitly via gray-code synchronization FIFOs where necessary for PCIe or management interfaces.
 
-## License
-MIT License
+Decoding protocols like ITCH or OUCH at the hardware level allows faster processing of incoming market updates, and updating bid/ask levels on the FPGA significantly reduces the time needed to react to price changes.
+
+
+
+### 6. Target hardware
+
+**AMD/Xilinx UltraScale+**: The VU9P and VU13P variants (used by Xilinx's own Accelerated Algorithmic Trading reference design) offer up to 2.5M logic cells, thousands of DSP slices, tens of megabytes of BRAM, and 100G-capable GTY transceivers directly accessible from the fabric — no external MAC required. Connecting critical interfaces like Ethernet/QSFP and PCI Express directly to the FPGA fabric enables market data feeds captured from the network interface to be immediately processed inside FPGA fabric, accommodating hundreds of parallel processors specialized for each task.
+
+**Intel Stratix 10**: Comparable to UltraScale+ in density, the Stratix 10 GX/SX line supports 58 Gbps transceivers and HBM2 integration on select packages, useful if the order book scales to require ultra-high-bandwidth memory beyond what BRAM can provide.
+
+
+### 7. GTKWave waveform analysis
+
+GTKWave reads VCD (Value Change Dump) or FST (Fast Signal Trace) files emitted by the Verilator simulation. Engineers use it to visually inspect the state of every internal register and bus at each clock cycle — verifying parser FSM transitions, observing order book state updates, confirming risk check block signals, and precisely measuring tick-to-trade latency by placing cursors on the input stimulus edge and the output OUCH valid assertion. FST is preferred over VCD for large captures because it offers significantly better compression and faster load times.
+
+
+
+## End-to-end latency budget
+
+A pipelined design breaks work across simultaneous stages: cycle 0 runs the parser, cycle 1 runs the order book update while a new packet enters the parser, cycle 2 runs the signal logic while the book updates, and cycle 3 runs the risk check while the signal evaluates — all simultaneously. With 4 pipeline stages at a 500 MHz clock (2 ns/cycle), the theoretical minimum tick-to-trade latency is around 8–20 ns for the logic, with network serialization adding tens of nanoseconds depending on packet size and physical link speed. By contrast, a CPU-equivalent implementation demonstrates 38 ± 22 µs with a long tail, illustrating the variability inherent in host OS processing.
