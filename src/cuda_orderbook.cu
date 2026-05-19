@@ -203,6 +203,7 @@ void run_orderbook_streaming(std::istream& in, int batchSize = 1024) {
             std::printf("Best Bid: %.4f\n", *h_bestBid[cur]);
             std::printf("Best Ask: %.4f\n", *h_bestAsk[cur]);
             std::printf("VWAP: %.4f\n", *h_vwap[cur]);
+            std::fflush(stdout);
 
             // switch buffer
             cur = (cur + 1) % nBuffers;
@@ -229,6 +230,7 @@ void run_orderbook_streaming(std::istream& in, int batchSize = 1024) {
         std::printf("Best Bid: %.4f\n", *h_bestBid[cur]);
         std::printf("Best Ask: %.4f\n", *h_bestAsk[cur]);
         std::printf("VWAP: %.4f\n", *h_vwap[cur]);
+        std::fflush(stdout);
     }
 
     // cleanup

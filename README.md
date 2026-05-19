@@ -70,7 +70,7 @@ flowchart LR
 - Shared GPU error-checking utility (`gpuCheck`) for CUDA runtime safety.
 - cuRAND-based stochastic path generation for Monte Carlo.
 - cuBLAS-backed matrix operation for covariance calculation.
-- Native C++ market-data streamer for Binance and Alpaca websocket feeds.
+- Native C++ market-data streamer for Binance websocket feeds and Alpaca quote feeds.
 - Sample datasets under `sample_data/` for immediate local runs.
 
 ---
@@ -94,7 +94,7 @@ Fluxion/
 │   ├── covariance.cu
 │   ├── cuda_orderbook.cu
 │   ├── gpu_utils.cu
-│   ├── market_feed.cpp
+│   ├── binance_ws.cpp
 │   └── monte_carlo.cu
 └── LICENSE
 ```
@@ -125,15 +125,15 @@ cmake -S . -B build
 cmake --build build
 ```
 
-This generates three executables in the build output:
+This generates three compute executables in the build output:
 
 - `orderbook`
 - `montecarlo`
 - `covariance`
 
-It also generates:
+It also generates the live market-data executable:
 
-- `market_feed`
+- `binance_ws`
 
 ---
 
@@ -187,28 +187,22 @@ sample_data/returns.csv
 
 ### Live Market Data Streamer
 
-Build and stream Binance top-of-book updates:
+Stream Binance top-of-book updates as normalized rows and pipe them into the GPU order book:
 
 ```bash
-./build/market_feed --exchange binance --symbol BTCUSDT
+./build/binance_ws --symbol BTCUSDT --normalize | ./build/orderbook --stream
 ```
 
-Build and stream Alpaca quote updates:
+If you want the human-readable feed instead, omit `--normalize`:
 
 ```bash
-ALPACA_API_KEY=... ALPACA_SECRET_KEY=... ./build/market_feed --exchange alpaca --symbol AAPL
+./build/binance_ws --symbol BTCUSDT
 ```
 
-Optional flags:
-
-- `--symbols AAPL,MSFT,...` for Alpaca multi-symbol subscriptions
-- `--alpaca-feed iex|sip` to select the Alpaca feed
-- `--count N` to stop after `N` parsed updates
-
-Output format:
+The normalized pipeline format is:
 
 ```text
-[exchange] SYMBOL bid=... ask=... bid_size=... ask_size=...
+bid ask volume
 ```
 
 Do not commit API keys to the repository.

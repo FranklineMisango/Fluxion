@@ -1,23 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Lightweight launcher for market_feed that sources per-user credentials
-# Credentials file (shell format) is expected at: $HOME/.config/fluxion/credentials
+# Lightweight launcher for Binance websocket streaming.
 
-CONFIG="$HOME/.config/fluxion/credentials"
-if [ -f "$CONFIG" ]; then
-  # protect file permissions
-  chmod 600 "$CONFIG" || true
-  # shellcheck disable=SC1090
-  set -a
-  source "$CONFIG"
-  set +a
-else
-  echo "Warning: credentials file $CONFIG not found. You can export ALPACA_API_KEY/ALPACA_SECRET_KEY or create the file." >&2
-fi
-
-EXCHANGE=${1:-alpaca}
-SYMBOL=${2:-AAPL}
+EXCHANGE=${1:-binance}
+SYMBOL=${2:-BTCUSDT}
 shift 2 || true
 
-exec ./build/market_feed --exchange "$EXCHANGE" --symbol "$SYMBOL" "$@"
+if [ "$EXCHANGE" != "binance" ]; then
+  echo "Only the Binance live feed is supported by the current build. Use ./build/binance_ws directly for live GPU testing." >&2
+  exit 1
+fi
+
+exec ./build/binance_ws --symbol "$SYMBOL" --normalize "$@"

@@ -12,7 +12,6 @@ find_package(Threads REQUIRED)
 add_executable(orderbook src/cuda_orderbook.cu src/gpu_utils.cu)
 add_executable(montecarlo src/monte_carlo.cu src/gpu_utils.cu)
 add_executable(covariance src/covariance.cu src/gpu_utils.cu)
-add_executable(market_feed src/market_feed.cpp)
 add_executable(binance_ws src/binance_ws.cpp)
 
 target_include_directories(orderbook PRIVATE include)
@@ -21,5 +20,4 @@ target_include_directories(covariance PRIVATE include)
 
 target_link_libraries(montecarlo PRIVATE curand)
 target_link_libraries(covariance PRIVATE cublas)
-target_link_libraries(market_feed PRIVATE OpenSSL::SSL OpenSSL::Crypto Threads::Threads)
 target_link_libraries(binance_ws PRIVATE OpenSSL::SSL OpenSSL::Crypto Threads::Threads boost_system)

@@ -4,6 +4,10 @@
 #include <boost/asio/connect.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ssl/stream.hpp>
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
+#include <string_view>
 #include <iostream>
 #include <string>
 namespace asio = boost::asio;
@@ -17,30 +21,39 @@ static std::string trim(std::string value) {
     return value.substr(begin, end - begin + 1);
 }
 
-static std::string json_string_field(const std::string& json, std::string_view key) {
+static std::string json_field_value(const std::string& json, std::string_view key) {
     const std::string token = std::string("\"") + std::string(key) + "\":";
     const std::size_t key_pos = json.find(token);
-    if (key_pos == std::string::npos) return {};
-    const std::size_t first_quote = json.find('"', key_pos + token.size());
-    if (first_quote == std::string::npos) return {};
-    const std::size_t second_quote = json.find('"', first_quote + 1);
-    if (second_quote == std::string::npos) return {};
-    return json.substr(first_quote + 1, second_quote - first_quote - 1);
-}
-
-static std::string json_number_field(const std::string& json, std::string_view key) {
-    const std::string token = std::string("\"") + std::string(key) + "\":";
-    const std::size_t key_pos = json.find(token);
-    if (key_pos == std::string::npos) return {};
     std::size_t start = key_pos + token.size();
-    while (start < json.size() && std::isspace(static_cast<unsigned char>(json[start]))) ++start;
+    while (start < json.size() && std::isspace(static_cast<unsigned char>(json[start]))) {
+        ++start;
+    }
+
+    if (start >= json.size()) {
+        return {};
+    }
+
+    if (json[start] == '"') {
+        const std::size_t second_quote = json.find('"', start + 1);
+        if (second_quote == std::string::npos) {
+            return {};
+        }
+        return json.substr(start + 1, second_quote - start - 1);
+    }
+
     std::size_t end = start;
     while (end < json.size()) {
         const char ch = json[end];
-        if ((ch >= '0' && ch <= '9') || ch == '.' || ch == '-' || ch == '+' || ch == 'e' || ch == 'E') { ++end; continue; }
-        break;
+        if (ch == ',' || ch == '}' || ch == ']' || std::isspace(static_cast<unsigned char>(ch))) {
+            break;
+        }
+        ++end;
     }
-    if (end == start) return {};
+
+    if (end == start) {
+        return {};
+    }
+
     return json.substr(start, end - start);
 }
 
@@ -75,6 +88,7 @@ Options parse_args(int argc, char** argv) {
 int main(int argc, char** argv) {
     try {
         const Options opt = parse_args(argc, argv);
+        std::cout.setf(std::ios::unitbuf);
 
         boost::asio::io_context ioc;
         boost::asio::ssl::context ctx{boost::asio::ssl::context::tlsv12_client};
@@ -106,31 +120,37 @@ int main(int argc, char** argv) {
             ws.read(buffer);
             const std::string msg = boost::beast::buffers_to_string(buffer.data());
 
-            // parse fields from raw JSON text (lightweight, avoids external JSON dep)
-            const std::string sym = json_string_field(msg, "s");
-            const std::string btext = json_number_field(msg, "b");
-            const std::string atext = json_number_field(msg, "a");
-            const std::string Btext = json_number_field(msg, "B");
-            const std::string Atext = json_number_field(msg, "A");
+            const std::string sym = json_field_value(msg, "s");
+            const std::string btext = json_field_value(msg, "b");
+            const std::string atext = json_field_value(msg, "a");
+            const std::string Btext = json_field_value(msg, "B");
+            const std::string Atext = json_field_value(msg, "A");
 
-            if (!sym.empty() && !btext.empty() && !atext.empty()) {
-                const double bid = to_double(btext);
-                const double ask = to_double(atext);
-                double bid_size = 0.0, ask_size = 0.0;
-                if (!Btext.empty()) bid_size = to_double(Btext);
-                if (!Atext.empty()) ask_size = to_double(Atext);
+            if (sym.empty() || btext.empty() || atext.empty()) {
+                continue;
+            }
 
-                if (opt.normalize) {
-                    const double vol = bid_size + ask_size;
-                    std::cout << bid << ' ' << ask << ' ' << vol << '\n';
-                } else {
-                    std::cout << '[' << sym << "] bid=" << bid << " ask=" << ask << " bid_size=" << bid_size << " ask_size=" << ask_size << '\n';
-                }
+            const double bid = to_double(btext);
+            const double ask = to_double(atext);
+            double bid_size = 0.0;
+            double ask_size = 0.0;
+            if (!Btext.empty()) {
+                bid_size = to_double(Btext);
+            }
+            if (!Atext.empty()) {
+                ask_size = to_double(Atext);
+            }
 
-                ++received;
-                if (opt.count > 0 && received >= opt.count) break;
+            if (opt.normalize) {
+                const double vol = bid_size + ask_size;
+                std::cout << bid << ' ' << ask << ' ' << vol << '\n';
             } else {
-                std::cerr << "recv (raw): " << msg << '\n';
+                std::cout << '[' << sym << "] bid=" << bid << " ask=" << ask << " bid_size=" << bid_size << " ask_size=" << ask_size << '\n';
+            }
+
+            ++received;
+            if (opt.count > 0 && received >= opt.count) {
+                break;
             }
         }
 
