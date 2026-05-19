@@ -70,6 +70,7 @@ flowchart LR
 - Shared GPU error-checking utility (`gpuCheck`) for CUDA runtime safety.
 - cuRAND-based stochastic path generation for Monte Carlo.
 - cuBLAS-backed matrix operation for covariance calculation.
+- Native C++ market-data streamer for Binance and Alpaca websocket feeds.
 - Sample datasets under `sample_data/` for immediate local runs.
 
 ---
@@ -93,6 +94,7 @@ Fluxion/
 │   ├── covariance.cu
 │   ├── cuda_orderbook.cu
 │   ├── gpu_utils.cu
+│   ├── market_feed.cpp
 │   └── monte_carlo.cu
 └── LICENSE
 ```
@@ -110,6 +112,7 @@ Fluxion links to:
 
 - `curand` (Monte Carlo executable)
 - `cublas` (Covariance executable)
+- OpenSSL (live websocket market-data utility)
 
 ---
 
@@ -127,6 +130,10 @@ This generates three executables in the build output:
 - `orderbook`
 - `montecarlo`
 - `covariance`
+
+It also generates:
+
+- `market_feed`
 
 ---
 
@@ -177,6 +184,34 @@ If no path is provided, it defaults to:
 ```text
 sample_data/returns.csv
 ```
+
+### Live Market Data Streamer
+
+Build and stream Binance top-of-book updates:
+
+```bash
+./build/market_feed --exchange binance --symbol BTCUSDT
+```
+
+Build and stream Alpaca quote updates:
+
+```bash
+ALPACA_API_KEY=... ALPACA_SECRET_KEY=... ./build/market_feed --exchange alpaca --symbol AAPL
+```
+
+Optional flags:
+
+- `--symbols AAPL,MSFT,...` for Alpaca multi-symbol subscriptions
+- `--alpaca-feed iex|sip` to select the Alpaca feed
+- `--count N` to stop after `N` parsed updates
+
+Output format:
+
+```text
+[exchange] SYMBOL bid=... ask=... bid_size=... ask_size=...
+```
+
+Do not commit API keys to the repository.
 
 ---
 

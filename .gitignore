@@ -1,5 +1,7 @@
 # CMake build output
 build/
+# per-user credentials for market_feed
+/.config/fluxion/
 CMakeCache.txt
 CMakeFiles/
 cmake-build-*/

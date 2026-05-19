@@ -3,6 +3,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <iostream>
 
 #include "gpu_utils.hpp"
 #include "orderbook.hpp"
@@ -120,8 +121,153 @@ void run_orderbook(const char* path) {
     cudaFree(d_vwap);
 }
 
+void run_orderbook_streaming(std::istream& in, int batchSize = 1024) {
+    // ping-pong buffers (2) to overlap H2D copy and kernel execution
+    const int nBuffers = 2;
+
+    // allocate pinned host buffers for bids/asks/vols
+    float* h_bids[nBuffers];
+    float* h_asks[nBuffers];
+    float* h_vols[nBuffers];
+    for (int i = 0; i < nBuffers; ++i) {
+        gpuCheck(cudaHostAlloc(reinterpret_cast<void**>(&h_bids[i]), batchSize * sizeof(float), cudaHostAllocDefault));
+        gpuCheck(cudaHostAlloc(reinterpret_cast<void**>(&h_asks[i]), batchSize * sizeof(float), cudaHostAllocDefault));
+        gpuCheck(cudaHostAlloc(reinterpret_cast<void**>(&h_vols[i]), batchSize * sizeof(float), cudaHostAllocDefault));
+    }
+
+    // device buffers per ping
+    float* d_bids[nBuffers];
+    float* d_asks[nBuffers];
+    float* d_vols[nBuffers];
+    float* d_bestBid[nBuffers];
+    float* d_bestAsk[nBuffers];
+    float* d_vwap[nBuffers];
+    for (int i = 0; i < nBuffers; ++i) {
+        gpuCheck(cudaMalloc(&d_bids[i], batchSize * sizeof(float)));
+        gpuCheck(cudaMalloc(&d_asks[i], batchSize * sizeof(float)));
+        gpuCheck(cudaMalloc(&d_vols[i], batchSize * sizeof(float)));
+        gpuCheck(cudaMalloc(&d_bestBid[i], sizeof(float)));
+        gpuCheck(cudaMalloc(&d_bestAsk[i], sizeof(float)));
+        gpuCheck(cudaMalloc(&d_vwap[i], sizeof(float)));
+    }
+
+    // pinned host result buffers
+    float* h_bestBid[nBuffers];
+    float* h_bestAsk[nBuffers];
+    float* h_vwap[nBuffers];
+    for (int i = 0; i < nBuffers; ++i) {
+        gpuCheck(cudaHostAlloc(reinterpret_cast<void**>(&h_bestBid[i]), sizeof(float), cudaHostAllocDefault));
+        gpuCheck(cudaHostAlloc(reinterpret_cast<void**>(&h_bestAsk[i]), sizeof(float), cudaHostAllocDefault));
+        gpuCheck(cudaHostAlloc(reinterpret_cast<void**>(&h_vwap[i]), sizeof(float), cudaHostAllocDefault));
+    }
+
+    // streams
+    cudaStream_t streams[nBuffers];
+    for (int i = 0; i < nBuffers; ++i) gpuCheck(cudaStreamCreate(&streams[i]));
+
+    int cur = 0;
+    int filled = 0;
+    std::string line;
+
+    while (std::getline(in, line)) {
+        std::stringstream ss(line);
+        float b = 0.0f, a = 0.0f, v = 0.0f;
+        if (!(ss >> b >> a >> v)) continue;
+
+        h_bids[cur][filled] = b;
+        h_asks[cur][filled] = a;
+        h_vols[cur][filled] = v;
+        ++filled;
+
+        if (filled >= batchSize) {
+            const int N = filled;
+
+            // async copy H->D on current stream
+            gpuCheck(cudaMemcpyAsync(d_bids[cur], h_bids[cur], N * sizeof(float), cudaMemcpyHostToDevice, streams[cur]));
+            gpuCheck(cudaMemcpyAsync(d_asks[cur], h_asks[cur], N * sizeof(float), cudaMemcpyHostToDevice, streams[cur]));
+            gpuCheck(cudaMemcpyAsync(d_vols[cur], h_vols[cur], N * sizeof(float), cudaMemcpyHostToDevice, streams[cur]));
+
+            // launch kernel on stream
+            orderbook_kernel<<<1, 32, 0, streams[cur]>>>(d_bids[cur], d_asks[cur], d_vols[cur], N,
+                                                        d_bestBid[cur], d_bestAsk[cur], d_vwap[cur]);
+            gpuCheck(cudaGetLastError());
+
+            // async copy results back
+            gpuCheck(cudaMemcpyAsync(h_bestBid[cur], d_bestBid[cur], sizeof(float), cudaMemcpyDeviceToHost, streams[cur]));
+            gpuCheck(cudaMemcpyAsync(h_bestAsk[cur], d_bestAsk[cur], sizeof(float), cudaMemcpyDeviceToHost, streams[cur]));
+            gpuCheck(cudaMemcpyAsync(h_vwap[cur], d_vwap[cur], sizeof(float), cudaMemcpyDeviceToHost, streams[cur]));
+
+            // wait for this stream to finish before printing and reusing the buffer
+            gpuCheck(cudaStreamSynchronize(streams[cur]));
+
+            std::printf("Best Bid: %.4f\n", *h_bestBid[cur]);
+            std::printf("Best Ask: %.4f\n", *h_bestAsk[cur]);
+            std::printf("VWAP: %.4f\n", *h_vwap[cur]);
+
+            // switch buffer
+            cur = (cur + 1) % nBuffers;
+            filled = 0;
+        }
+    }
+
+    // final partial batch
+    if (filled > 0) {
+        const int N = filled;
+        gpuCheck(cudaMemcpyAsync(d_bids[cur], h_bids[cur], N * sizeof(float), cudaMemcpyHostToDevice, streams[cur]));
+        gpuCheck(cudaMemcpyAsync(d_asks[cur], h_asks[cur], N * sizeof(float), cudaMemcpyHostToDevice, streams[cur]));
+        gpuCheck(cudaMemcpyAsync(d_vols[cur], h_vols[cur], N * sizeof(float), cudaMemcpyHostToDevice, streams[cur]));
+
+        orderbook_kernel<<<1, 32, 0, streams[cur]>>>(d_bids[cur], d_asks[cur], d_vols[cur], N,
+                                                    d_bestBid[cur], d_bestAsk[cur], d_vwap[cur]);
+        gpuCheck(cudaGetLastError());
+
+        gpuCheck(cudaMemcpyAsync(h_bestBid[cur], d_bestBid[cur], sizeof(float), cudaMemcpyDeviceToHost, streams[cur]));
+        gpuCheck(cudaMemcpyAsync(h_bestAsk[cur], d_bestAsk[cur], sizeof(float), cudaMemcpyDeviceToHost, streams[cur]));
+        gpuCheck(cudaMemcpyAsync(h_vwap[cur], d_vwap[cur], sizeof(float), cudaMemcpyDeviceToHost, streams[cur]));
+        gpuCheck(cudaStreamSynchronize(streams[cur]));
+
+        std::printf("Best Bid: %.4f\n", *h_bestBid[cur]);
+        std::printf("Best Ask: %.4f\n", *h_bestAsk[cur]);
+        std::printf("VWAP: %.4f\n", *h_vwap[cur]);
+    }
+
+    // cleanup
+    for (int i = 0; i < nBuffers; ++i) {
+        cudaFree(d_bids[i]);
+        cudaFree(d_asks[i]);
+        cudaFree(d_vols[i]);
+        cudaFree(d_bestBid[i]);
+        cudaFree(d_bestAsk[i]);
+        cudaFree(d_vwap[i]);
+
+        cudaFreeHost(h_bids[i]);
+        cudaFreeHost(h_asks[i]);
+        cudaFreeHost(h_vols[i]);
+
+        cudaFreeHost(h_bestBid[i]);
+        cudaFreeHost(h_bestAsk[i]);
+        cudaFreeHost(h_vwap[i]);
+
+        cudaStreamDestroy(streams[i]);
+    }
+}
+
 int main(int argc, char** argv) {
-    const char* path = (argc > 1) ? argv[1] : "sample_data/orderbook.csv";
+    if (argc > 1) {
+        const std::string arg = argv[1];
+        if (arg == "--stream" || arg == "-") {
+            // read normalized rows from stdin
+            run_orderbook_streaming(std::cin);
+            return 0;
+        }
+        // otherwise treat arg as path
+        const char* path = argv[1];
+        run_orderbook(path);
+        return 0;
+    }
+
+    // default: read from sample CSV as before
+    const char* path = "sample_data/orderbook.csv";
     run_orderbook(path);
     return 0;
 }
